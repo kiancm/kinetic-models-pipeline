@@ -1,16 +1,13 @@
 name: base
 channels:
   - defaults
-  - rmg
   - conda-forge
 dependencies:
-  - python=3.7
-  - rmg=3.1.0
-  - rmgdatabase=3.1.0
   - requests
-  - PyGithub
   - python-dotenv
   - habanero
+  - pydantic
+  - gxx_linux-64
   - pip
   - pip:
     - datamodel-code-generator[http]
