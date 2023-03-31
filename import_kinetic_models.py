@@ -1,28 +1,28 @@
+from collections import Counter
 import os
-from pathlib import Path
 import re
-from typing import Any, Iterable, List, NamedTuple, Optional, Tuple, Union
-from multiprocessing import Pool, cpu_count
 from dateutil import parser
-
+from pathlib import Path
+from typing import Iterable, List, NamedTuple, Optional, Tuple, Union
 
 import habanero
 import requests
+from pydantic import ValidationError
 from dotenv import load_dotenv
-from github import Github
-from github.ContentFile import ContentFile
-from github.Repository import Repository
+import rmgpy
+from rmgpy import kinetics as rmgkinetics, constants
+from rmgpy.molecule import Molecule
+from rmgpy.reaction import Reaction as RmgReaction
+from rmgpy.species import Species as RmgSpecies
+from rmgpy.data.kinetics.library import KineticsLibrary
+from rmgpy.data.thermo import ThermoLibrary
+from rmgpy.thermo import NASA, ThermoData, Wilhoit, NASAPolynomial
 
-from models import KineticModel, Kinetics, Source, Author, Thermo, Transport, Species, Isomer, Structure, NamedSpecies
+from models import Arrhenius, ArrheniusEP, KineticModel, Kinetics, Reaction, ReactionSpecies, Source, Author, Thermo, Transport, Species, Isomer, Structure, NamedSpecies
 
 load_dotenv()
 
 Seconds = Union[int, float]
-
-
-class DownloadPath(NamedTuple):
-    path: Path
-    download_url: str
 
 
 class ModelDir(NamedTuple):
@@ -36,36 +36,8 @@ class EnvironmentVariableMissing(Exception):
     pass
 
 
-def get_paths(repo: Repository, data_path: Path, contents: List[ContentFile]) -> Iterable[DownloadPath]:
-    for content in contents:
-        if content.type == "dir":
-            yield from get_paths(repo, data_path, repo.get_contents(content.path))
-        else:
-            yield DownloadPath(data_path / content.path, content.download_url)
-
-
-def download(download_path: DownloadPath, timeout: Seconds = 10) -> None:
-    path, url = download_path
-    path.parent.mkdir(exist_ok=True, parents=True)
-    content = requests.get(url, timeout=timeout).content
-    path.write_bytes(content)
-
-
-def download_rmg_models(data_path: Path = Path("rmg-models")) -> None:
-    PAT = os.getenv("PAT")
-    g = Github(PAT)
-    owner_name = "kianmehrabani"
-    repo_name = "RMG-models"
-    repo = g.get_repo(f"{owner_name}/{repo_name}")
-    contents: list[ContentFile] = repo.get_contents("")
-    paths = get_paths(repo, data_path, contents)
-
-    thread_pool = Pool(cpu_count())
-    thread_pool.map(download, paths)
-
-
 def get_model_paths(data_path: Path, ignore_list: List[str] = []) -> Iterable[ModelDir]:
-    for path in data_path.iterdir():
+    for path in data_path.rglob("*"):
         name = path.name
         thermo_path = path / "RMG-Py-thermo-library" / "ThermoLibrary.py"
         kinetics_path = path / "RMG-Py-kinetics-library" / "reactions.py"
@@ -100,21 +72,30 @@ class MissingAuthorData(Exception):
 class InvalidAuthorData(Exception):
     pass
 
+class ThermoLibraryLoadError(Exception):
+    pass
 
-# class AuthorEntry(Protocol):
-#     given: Optional[str]
-#     family: Optional[str]
+class KineticsLibraryLoadError(Exception):
+    pass
+
+class CreateSpeciesError(Exception):
+    pass
+
+class CreateSourceError(Exception):
+    pass
 
 
 class DOIError(Exception):
     pass
 
 
-def create_authors(author_entries: Iterable[Any]) -> Iterable[Author]:
+def create_authors(author_entries: Iterable[dict]) -> Iterable[Author]:
+    if author_entries is None:
+        raise MissingAuthorData()
     for entry in author_entries:
-        if entry.given is None or entry.family is None:
+        if entry["given"] is None or entry["family"] is None:
             raise InvalidAuthorData(entry)
-        yield Author(firstname=entry.given, lastname=entry.family)
+        yield Author(firstname=entry["given"], lastname=entry["family"])
 
 
 def get_doi(source_path: Path):
@@ -153,69 +134,228 @@ def get_doi(source_path: Path):
 
 
 def create_source(path: Path) -> Source:
-    crossref = habanero.Crossref(mailto="kianmehrabani@gmail.com")
-    doi = get_doi(path)
-    reference = crossref.works(ids=doi).get("message", "") if doi else {}
-    created_info = reference.get("created", {})
-    date = parser.parse(created_info.get("date-time", "")) if created_info else None
-    year = date.year if date else ""
-    title_body = reference.get("title", "")
-    source_title = title_body[0] if isinstance(title_body, list) else title_body
-    name_body = reference.get("short-container-title", "")
-    journal_name = name_body[0] if isinstance(name_body, list) else name_body
-    volume_number = reference.get("volume", "")
-    page_numbers = reference.get("page", "")
-    author_data = reference.get("author")
+    try:
+        crossref = habanero.Crossref(mailto="kianmehrabani@gmail.com")
+        doi = get_doi(path)
+        reference = crossref.works(ids=doi).get("message", "") if doi else {}
+        created_info = reference.get("created", {})
+        date = parser.parse(created_info.get("date-time", "")) if created_info else None
+        year = date.year if date else ""
+        title_body = reference.get("title", "")
+        source_title = title_body[0] if isinstance(title_body, list) else title_body
+        name_body = reference.get("short-container-title", "")
+        journal_name = name_body[0] if isinstance(name_body, list) else name_body
+        volume_number = reference.get("volume", "")
+        page_numbers = reference.get("page", "")
+        author_data = reference.get("author")
+        authors = create_authors(author_data)
 
-    if author_data is None:
-        raise MissingAuthorData(path.name)
+        return Source(
+            doi=doi,
+            publication_year=year,
+            title=source_title,
+            journal_name=journal_name,
+            journal_volume=volume_number,
+            page_numbers=page_numbers,
+            authors=list(authors),
+        )
+    except (InvalidAuthorData, DOIError, ValidationError) as e:
+        raise CreateSourceError(e)
 
-    authors = create_authors(author_data)
 
-    return Source(
-        doi=doi,
-        publication_year=year,
-        title=source_title,
-        journal_name=journal_name,
-        journal_volume=volume_number,
-        page_numbers=page_numbers,
-        authors=list(authors),
+def create_structure(molecule: Molecule) -> Structure:
+    return Structure(
+        smiles=molecule.to_smiles(),
+        adjlist=molecule.to_adjacency_list(),
+        multiplicity=molecule.multiplicity,
     )
 
 
-def create_thermo(path: Path) -> Tuple[Iterable[Thermo], Iterable[NamedSpecies]]:
-    ...
+def create_species(molecule: Molecule) -> Species:
+    formula = molecule.get_formula()
+    inchi = molecule.to_inchi()
+
+    structure = create_structure(molecule)
+    isomer = Isomer(formula=formula, inchi=inchi, structures=[structure])
+
+    return Species(isomers=[isomer])
 
 
-def create_kinetics(path: Path) -> Tuple[Iterable[Kinetics], Iterable[NamedSpecies]]:
-    ...
+def create_named_species(name: str, molecule: Molecule) -> NamedSpecies:
+    return NamedSpecies(name=name, species=create_species(molecule))
 
 
-def create_kinetic_model(model_dir: ModelDir) -> KineticModel:
+def create_nested_species(rmg_species: RmgSpecies) -> NamedSpecies:
+    formula = rmg_species.molecule[0].get_formula()
+    try:
+        inchi = rmg_species.get_augmented_inchi()
+    except (IndexError, AttributeError):
+        raise CreateSpeciesError()
+
+    structures = [create_structure(m) for m in rmg_species.molecule]
+    isomer = Isomer(formula=formula, inchi=inchi, structures=structures)
+
+    species = Species(isomers=[isomer])
+
+    return NamedSpecies(name=rmg_species.label, species=species)
+
+
+def create_thermo(path: Path, source: Source) -> Iterable[Tuple[Thermo, NamedSpecies]]:
+    local_context = {
+        "ThermoData": ThermoData,
+        "Wilhoit": Wilhoit,
+        "NASAPolynomial": NASAPolynomial,
+        "NASA": NASA,
+    }
+    library = ThermoLibrary(label=str(path))
+    library.SKIP_DUPLICATES = True
+    try:
+        library.load(path, local_context=local_context)
+    except (rmgpy.exceptions.DatabaseError, ValueError) as e:
+        raise ThermoLibraryLoadError(e)
+    for species_name, entry in library.entries.items():
+        species = create_named_species(species_name, entry.item)
+        thermo_data = entry.data
+        poly1, poly2 = thermo_data.polynomials
+        thermo = Thermo(
+            species=species.species,
+            polynomial1=poly1.coeffs.tolist(),
+            polynomial2=poly2.coeffs.tolist(),
+            min_temp1=poly1.Tmin.value_si,
+            max_temp1=poly1.Tmax.value_si,
+            min_temp2=poly2.Tmin.value_si,
+            max_temp2=poly2.Tmax.value_si,
+            source=source,
+        )
+
+        yield thermo, species
+
+
+def create_reaction(rmg_reaction: RmgReaction) -> Tuple[Reaction, List[NamedSpecies]]:
+    all_species: List[RmgSpecies] = [*rmg_reaction.reactants, *rmg_reaction.products]
+    species_counts = Counter(all_species)
+    rs = []
+    named_species = []
+    for r in rmg_reaction.reactants:
+        ns = create_nested_species(r)
+        named_species.append(ns)
+        coeff = species_counts[r]
+        reaction_species = ReactionSpecies(species=ns.species, coefficient=-coeff)
+        rs.append(reaction_species)
+
+    for p in rmg_reaction.products:
+        ns = create_nested_species(p)
+        named_species.append(ns)
+        coeff = species_counts[p]
+        reaction_species = ReactionSpecies(species=ns.species, coefficient=coeff)
+        rs.append(reaction_species)
+
+    reaction = Reaction(reaction_species=rs, reversible=rmg_reaction.reversible)
+
+    return reaction, named_species
+
+
+def create_kinetics_data(rmg_kinetics_data) -> Union[Arrhenius, ArrheniusEP]:
+    return Arrhenius(a=0, a_si=0, a_units="", n=0, e=0, e_si=0, e_units="", s="")
+
+def create_kinetics(path: Path, source: Source) -> Iterable[Tuple[Kinetics, List[NamedSpecies]]]:
+    local_context = {
+        "KineticsData": rmgkinetics.KineticsData,
+        "Arrhenius": rmgkinetics.Arrhenius,
+        "ArrheniusEP": rmgkinetics.ArrheniusEP,
+        "MultiArrhenius": rmgkinetics.MultiArrhenius,
+        "MultiPDepArrhenius": rmgkinetics.MultiPDepArrhenius,
+        "PDepArrhenius": rmgkinetics.PDepArrhenius,
+        "Chebyshev": rmgkinetics.Chebyshev,
+        "ThirdBody": rmgkinetics.ThirdBody,
+        "Lindemann": rmgkinetics.Lindemann,
+        "Troe": rmgkinetics.Troe,
+        "R": constants.R,
+    }
+    library = KineticsLibrary(label=str(path))
+    library.SKIP_DUPLICATES = True
+    try:
+        library.load(path, local_context=local_context)
+    except rmgpy.exceptions.DatabaseError as e:
+        raise KineticsLibraryLoadError(e)
+    for entry in library.entries.values():
+        rmg_kinetics_data = entry.data
+        rmg_reaction = entry.item
+        reaction, species = create_reaction(rmg_reaction)
+        kinetics_data = create_kinetics_data(rmg_kinetics_data)
+
+        min_temp = getattr(rmg_kinetics_data.Tmin, "value_si", None)
+        max_temp = getattr(rmg_kinetics_data.Tmax, "value_si", None)
+        min_pressure = getattr(rmg_kinetics_data.Pmin, "value_si", None)
+        max_pressure = getattr(rmg_kinetics_data.Pmax, "value_si", None)
+
+        kinetics = Kinetics(
+            reaction=reaction,
+            data=kinetics_data,
+            for_reverse=False,
+            min_temp=min_temp,
+            max_temp=max_temp,
+            min_pressure=min_pressure,
+            max_pressure=max_pressure,
+            source=source,
+        )
+
+        yield kinetics, species
+
+
+def group_submodels(thermo_species: Iterable[Tuple[Thermo, NamedSpecies]], kinetics_species: Iterable[Tuple[Kinetics, List[NamedSpecies]]]) -> Tuple[List[Thermo], List[Kinetics], List[NamedSpecies]]:
+    thermo = []
+    kinetics = []
+    species = []
+
+    for t, s in thermo_species:
+        thermo.append(t)
+        species.append(s)
+
+    for k, s in kinetics_species:
+        kinetics.append(k)
+        species.extend(s)
+
+    return thermo, kinetics, species
+
+
+def create_kinetic_model(model_dir: ModelDir) -> Optional[KineticModel]:
+
     try:
         source = create_source(model_dir.source_path)
-        thermo, named_species1 = create_thermo(model_dir.thermo_path)
-        kinetics, named_species2 = create_kinetics(model_dir.kinetics_path)
+        thermo_species = create_thermo(model_dir.thermo_path, source)
+        kinetics_species = create_kinetics(model_dir.kinetics_path, source)
+        thermo, kinetics, species = group_submodels(thermo_species, kinetics_species)
 
         return KineticModel(
             name=model_dir.name,
-            named_species=[*named_species1, *named_species2],
+            named_species=species,
             thermo=thermo,
             kinetics=kinetics,
             source=source,
-        ) # type: ignore
+        )
+    except (CreateSourceError, ThermoLibraryLoadError, KineticsLibraryLoadError, CreateSpeciesError):
+        return None
 
-    catch 
 
-def import_rmg_models(endpoint: str, data_path: Path = Path("rmg-models")) -> None:
+def import_rmg_models(endpoint: str, data_path: Path = Path("/rmg-models")) -> None:
     model_dirs = get_model_paths(data_path)
     for model_dir in model_dirs:
         km = create_kinetic_model(model_dir)
-        response = requests.post(endpoint, data=km.json(exclude_none=True, exclude_unset=True))
+        if km is not None:
+            requests.post(endpoint, data=km.json(exclude_none=True, exclude_unset=True))
+
+def main():
+    endpoint = os.getenv("POST_ENDPOINT")
+    rmg_models_path = os.getenv("RMG_MODELS_PATH")
+    if endpoint is None:
+        raise EnvironmentVariableMissing("POST_ENDPOINT not set")
+
+    if rmg_models_path is not None:
+        import_rmg_models(endpoint, data_path=Path(rmg_models_path))
+    else:
+        import_rmg_models(endpoint)
 
 
 if __name__ == "__main__":
-    endpoint = os.getenv("POST_ENDPOINT")
-    if endpoint is None:
-        raise EnvironmentVariableMissing("POST_ENDPOINT not set")
-    import_rmg_models(endpoint)
+    main()
