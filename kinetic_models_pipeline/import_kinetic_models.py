@@ -8,8 +8,8 @@ from typing import Iterable, List, NamedTuple, Optional, Tuple, Union
 import habanero
 import requests
 from pydantic import ValidationError
-from dotenv import load_dotenv
 import rmgpy
+from dotenv import load_dotenv
 from rmgpy import kinetics as rmgkinetics, constants
 from rmgpy.molecule import Molecule
 from rmgpy.reaction import Reaction as RmgReaction
@@ -18,12 +18,7 @@ from rmgpy.data.kinetics.library import KineticsLibrary
 from rmgpy.data.thermo import ThermoLibrary
 from rmgpy.thermo import NASA, ThermoData, Wilhoit, NASAPolynomial
 
-from models import Arrhenius, ArrheniusEP, KineticModel, Kinetics, Reaction, ReactionSpecies, Source, Author, Thermo, Transport, Species, Isomer, Structure, NamedSpecies
-
-load_dotenv()
-
-Seconds = Union[int, float]
-
+from kinetic_models_pipeline.models import Arrhenius, ArrheniusEP, KineticModel, Kinetics, Reaction, ReactionSpecies, Source, Author, Thermo, Transport, Species, Isomer, Structure, NamedSpecies
 
 class ModelDir(NamedTuple):
     name: str
@@ -355,7 +350,3 @@ def main():
         import_rmg_models(endpoint, data_path=Path(rmg_models_path))
     else:
         import_rmg_models(endpoint)
-
-
-if __name__ == "__main__":
-    main()
