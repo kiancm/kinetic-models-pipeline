@@ -9,7 +9,6 @@ import habanero
 import requests
 from pydantic import ValidationError
 import rmgpy
-from dotenv import load_dotenv
 from rmgpy import kinetics as rmgkinetics, constants
 from rmgpy.molecule import Molecule
 from rmgpy.reaction import Reaction as RmgReaction
@@ -18,7 +17,23 @@ from rmgpy.data.kinetics.library import KineticsLibrary
 from rmgpy.data.thermo import ThermoLibrary
 from rmgpy.thermo import NASA, ThermoData, Wilhoit, NASAPolynomial
 
-from kinetic_models_pipeline.models import Arrhenius, ArrheniusEP, KineticModel, Kinetics, Reaction, ReactionSpecies, Source, Author, Thermo, Transport, Species, Isomer, Structure, NamedSpecies
+from kinetic_models_pipeline.models import (
+    Arrhenius,
+    ArrheniusEP,
+    KineticModel,
+    Kinetics,
+    Reaction,
+    ReactionSpecies,
+    Source,
+    Author,
+    Thermo,
+    Transport,
+    Species,
+    Isomer,
+    Structure,
+    NamedSpecies,
+)
+
 
 class ModelDir(NamedTuple):
     name: str
@@ -44,8 +59,9 @@ def get_model_paths(data_path: Path, ignore_list: List[str] = []) -> Iterable[Mo
                 name=name,
                 thermo_path=thermo_path,
                 kinetics_path=kinetics_path,
-                source_path=source_path
+                source_path=source_path,
             )
+
 
 def create_test_kinetic_model() -> KineticModel:
     structure = Structure(adjlist="", smiles="", multiplicity=0)
@@ -53,9 +69,28 @@ def create_test_kinetic_model() -> KineticModel:
     species = Species(isomers=[isomer])
     named_species = NamedSpecies(name="", species=species)
     author = Author(firstname="kian", lastname="mehrabani")
-    source = Source(doi="", publication_year=0, title="", journal_name="", journal_volume="", page_numbers="", authors=[author])
-    transport = Transport(species=species, geometry=0, well_depth=0, collision_diameter=0, dipole_moment=0, polarizability=0, rotational_relaxation=0, source=source)
-    kinetic_model = KineticModel(name="", named_species=[named_species], transport=[transport], source=source)
+    source = Source(
+        doi="",
+        publication_year=0,
+        title="",
+        journal_name="",
+        journal_volume="",
+        page_numbers="",
+        authors=[author],
+    )
+    transport = Transport(
+        species=species,
+        geometry=0,
+        well_depth=0,
+        collision_diameter=0,
+        dipole_moment=0,
+        polarizability=0,
+        rotational_relaxation=0,
+        source=source,
+    )
+    kinetic_model = KineticModel(
+        name="", named_species=[named_species], transport=[transport], source=source
+    )
 
     return kinetic_model
 
@@ -67,14 +102,18 @@ class MissingAuthorData(Exception):
 class InvalidAuthorData(Exception):
     pass
 
+
 class ThermoLibraryLoadError(Exception):
     pass
+
 
 class KineticsLibraryLoadError(Exception):
     pass
 
+
 class CreateSpeciesError(Exception):
     pass
+
 
 class CreateSourceError(Exception):
     pass
@@ -253,6 +292,7 @@ def create_reaction(rmg_reaction: RmgReaction) -> Tuple[Reaction, List[NamedSpec
 def create_kinetics_data(rmg_kinetics_data) -> Union[Arrhenius, ArrheniusEP]:
     return Arrhenius(a=0, a_si=0, a_units="", n=0, e=0, e_si=0, e_units="", s="")
 
+
 def create_kinetics(path: Path, source: Source) -> Iterable[Tuple[Kinetics, List[NamedSpecies]]]:
     local_context = {
         "KineticsData": rmgkinetics.KineticsData,
@@ -298,7 +338,10 @@ def create_kinetics(path: Path, source: Source) -> Iterable[Tuple[Kinetics, List
         yield kinetics, species
 
 
-def group_submodels(thermo_species: Iterable[Tuple[Thermo, NamedSpecies]], kinetics_species: Iterable[Tuple[Kinetics, List[NamedSpecies]]]) -> Tuple[List[Thermo], List[Kinetics], List[NamedSpecies]]:
+def group_submodels(
+    thermo_species: Iterable[Tuple[Thermo, NamedSpecies]],
+    kinetics_species: Iterable[Tuple[Kinetics, List[NamedSpecies]]],
+) -> Tuple[List[Thermo], List[Kinetics], List[NamedSpecies]]:
     thermo = []
     kinetics = []
     species = []
@@ -329,7 +372,12 @@ def create_kinetic_model(model_dir: ModelDir) -> Optional[KineticModel]:
             kinetics=kinetics,
             source=source,
         )
-    except (CreateSourceError, ThermoLibraryLoadError, KineticsLibraryLoadError, CreateSpeciesError):
+    except (
+        CreateSourceError,
+        ThermoLibraryLoadError,
+        KineticsLibraryLoadError,
+        CreateSpeciesError,
+    ):
         return None
 
 
@@ -339,6 +387,7 @@ def import_rmg_models(endpoint: str, data_path: Path = Path("/rmg-models")) -> N
         km = create_kinetic_model(model_dir)
         if km is not None:
             requests.post(endpoint, data=km.json(exclude_none=True, exclude_unset=True))
+
 
 def main():
     endpoint = os.getenv("POST_ENDPOINT")

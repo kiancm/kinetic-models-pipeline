@@ -5,8 +5,10 @@ from pathlib import Path
 import requests
 from datamodel_code_generator import InputFileType, generate
 
+
 class MissingEnvironmentVariable(Exception):
     pass
+
 
 def get_json_schema(url) -> str:
     content = requests.get(url).json()
