@@ -4,10 +4,7 @@ from pathlib import Path
 
 import requests
 from datamodel_code_generator import InputFileType, generate
-
-
-class MissingEnvironmentVariable(Exception):
-    pass
+from errors import EnvironmentVariableMissing
 
 
 def get_json_schema(url) -> str:
@@ -28,5 +25,5 @@ def generate_models(endpoint: str, path: Path = Path(__file__).parent / "models.
 def gen():
     endpoint = os.getenv("SCHEMA_ENDPOINT")
     if endpoint is None:
-        raise MissingEnvironmentVariable("SCHEMA_ENDPOINT is not set")
+        raise EnvironmentVariableMissing("SCHEMA_ENDPOINT is not set")
     generate_models(endpoint)

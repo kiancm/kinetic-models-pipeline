@@ -33,6 +33,16 @@ from kinetic_models_pipeline.models import (
     Structure,
     NamedSpecies,
 )
+from errors import (
+    EnvironmentVariableMissing,
+    MissingAuthorData,
+    InvalidAuthorData,
+    ThermoLibraryLoadError,
+    KineticsLibraryLoadError,
+    CreateSpeciesError,
+    CreateSourceError,
+    DOIError,
+)
 
 
 class ModelDir(NamedTuple):
@@ -40,10 +50,6 @@ class ModelDir(NamedTuple):
     thermo_path: Path
     kinetics_path: Path
     source_path: Path
-
-
-class EnvironmentVariableMissing(Exception):
-    pass
 
 
 def get_model_paths(data_path: Path, ignore_list: List[str] = []) -> Iterable[ModelDir]:
@@ -93,34 +99,6 @@ def create_test_kinetic_model() -> KineticModel:
     )
 
     return kinetic_model
-
-
-class MissingAuthorData(Exception):
-    pass
-
-
-class InvalidAuthorData(Exception):
-    pass
-
-
-class ThermoLibraryLoadError(Exception):
-    pass
-
-
-class KineticsLibraryLoadError(Exception):
-    pass
-
-
-class CreateSpeciesError(Exception):
-    pass
-
-
-class CreateSourceError(Exception):
-    pass
-
-
-class DOIError(Exception):
-    pass
 
 
 def create_authors(author_entries: Iterable[dict]) -> Iterable[Author]:
